@@ -1,7 +1,9 @@
+--- @sync entry
 --- Compare two files or directories (selected/hovered, two selections, or two tabs).
---- Runs synchronously on purpose: blocking I/O must not run inside ya.async.
 
-local SCRIPT_SOURCE = require("compare-script")
+local SCRIPT_SOURCE = require(".compare-script")
+
+local FINAL_NOTIFY_SECS = 8
 
 local function cache_script_path()
 	local cache = os.getenv("XDG_CACHE_HOME") or (os.getenv("HOME") .. "/.cache")
@@ -10,9 +12,18 @@ end
 
 local function ensure_script()
 	local path = cache_script_path()
+	local existing = io.open(path, "r")
+	if existing then
+		local content = existing:read("*a")
+		existing:close()
+		if content == SCRIPT_SOURCE then
+			return path
+		end
+	end
+
 	local dir = path:match("^(.*)/[^/]+$")
 	if dir then
-		os.execute('mkdir -p "' .. dir:gsub('"', '\\"') .. '"')
+		Command("mkdir"):arg("-p"):arg(dir):status()
 	end
 
 	local f = io.open(path, "w")
@@ -21,7 +32,7 @@ local function ensure_script()
 	end
 	f:write(SCRIPT_SOURCE)
 	f:close()
-	os.execute('chmod +x "' .. path:gsub('"', '\\"') .. '"')
+	Command("chmod"):arg("+x"):arg(path):status()
 	return path
 end
 
@@ -33,7 +44,7 @@ local function notify(title, content, level, timeout)
 	ya.notify {
 		title = title or "Compare",
 		content = content,
-		timeout = timeout or 10,
+		timeout = timeout or FINAL_NOTIFY_SECS,
 		level = level or "info",
 	}
 end
@@ -140,19 +151,26 @@ local function entry(_st, job)
 	end
 
 	if not a or not b then
-		return notify("Compare", b or "Missing paths", "error")
+		return notify("Compare", b or "Missing paths", "error", FINAL_NOTIFY_SECS)
 	end
 
 	local script, err = ensure_script()
 	if not script then
-		return notify("Compare", err, "error")
+		return notify("Compare", err, "error", FINAL_NOTIFY_SECS)
 	end
+
+	notify(
+		"Compare",
+		string.format("Comparing…\n%s\n%s", basename(a), basename(b)),
+		"info",
+		2
+	)
 
 	ya.dbg("[compare] A=", a, "B=", b)
 
 	local report, run_err = run_compare(script, a, b)
 	if not report then
-		return notify("Compare", run_err, "error")
+		return notify("Compare", run_err, "error", FINAL_NOTIFY_SECS)
 	end
 
 	local brief = summary_lines(report)
@@ -171,7 +189,7 @@ local function entry(_st, job)
 		"Compare",
 		string.format("%s ↔ %s\n\n%s%s", basename(a), basename(b), brief, footer),
 		level,
-		15
+		FINAL_NOTIFY_SECS
 	)
 end
 
