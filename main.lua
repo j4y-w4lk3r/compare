@@ -3,6 +3,7 @@
 --- Resolve paths + prepare script synchronously; only bash runs in ya.async.
 
 local FINAL_NOTIFY_SECS = 10
+local WORKING_NOTIFY_SECS = 4
 local COMPARE_TIMEOUT_SECS = 120
 
 local function log(msg)
@@ -194,10 +195,10 @@ local function entry(_st, job)
 	end
 
 	notify(
-		"Compare",
+		"Compare — working",
 		string.format("Comparing…\n%s\n%s", basename(a), basename(b)),
 		"info",
-		COMPARE_TIMEOUT_SECS
+		WORKING_NOTIFY_SECS
 	)
 
 	ya.async(function()
