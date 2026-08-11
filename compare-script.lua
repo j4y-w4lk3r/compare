@@ -76,16 +76,14 @@ if [[ -d $a && -d $b ]]; then
 
 	files_a=$(wc -l <"$list_a" | tr -d ' ')
 	files_b=$(wc -l <"$list_b" | tr -d ' ')
-	size_a=$(du -sh "$a" 2>/dev/null | awk '{print $1}')
-	size_b=$(du -sh "$b" 2>/dev/null | awk '{print $1}')
 
 	only_a=$(comm -23 "$list_a" "$list_b" | wc -l | tr -d ' ')
 	only_b=$(comm -13 "$list_a" "$list_b" | wc -l | tr -d ' ')
 	comm -12 "$list_a" "$list_b" >"$shared"
 
 	echo "Type: directory"
-	echo "  A files: $files_a   size: $size_a"
-	echo "  B files: $files_b   size: $size_b"
+	echo "  A files: $files_a"
+	echo "  B files: $files_b"
 	echo "  Only in A: $only_a"
 	echo "  Only in B: $only_b"
 

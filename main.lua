@@ -1,10 +1,69 @@
+--- @sync entry
 --- Compare two files or directories (selected/hovered, two selections, or two tabs).
 
-local FINAL_NOTIFY_SECS = 12
-local WORKING_NOTIFY_SECS = 300
+local FINAL_NOTIFY_SECS = 10
+
+local function log(msg)
+	ya.dbg("[compare] ", msg)
+	local cache = os.getenv("XDG_CACHE_HOME") or (os.getenv("HOME") .. "/.cache")
+	local path = cache .. "/yazi/compare/debug.log"
+	local f = io.open(path, "a")
+	if f then
+		f:write(os.date("%Y-%m-%d %H:%M:%S"), " ", tostring(msg), "\n")
+		f:close()
+	end
+end
+
+local function load_script_source()
+	local ok, source = pcall(require, ".compare-script")
+	if not ok then
+		return nil, tostring(source)
+	end
+	return source
+end
+
+local function cache_script_path()
+	local cache = os.getenv("XDG_CACHE_HOME") or (os.getenv("HOME") .. "/.cache")
+	return cache .. "/yazi/compare/compare.sh"
+end
+
+local function ensure_script(source)
+	local path = cache_script_path()
+	local existing = io.open(path, "r")
+	if existing then
+		local content = existing:read("*a")
+		existing:close()
+		if content == source then
+			return path
+		end
+	end
+
+	local dir = path:match("^(.*)/[^/]+$")
+	if dir then
+		Command("mkdir"):arg("-p"):arg(dir):status()
+	end
+
+	local f = io.open(path, "w")
+	if not f then
+		return nil, "Cannot write compare script to " .. path
+	end
+	f:write(source)
+	f:close()
+	Command("chmod"):arg("+x"):arg(path):status()
+	return path
+end
 
 local function basename(path)
 	return tostring(path):match("([^/]+)/?$") or path
+end
+
+local function notify(title, content, level, timeout)
+	ya.notify {
+		title = title or "Compare",
+		content = content,
+		timeout = timeout or FINAL_NOTIFY_SECS,
+		level = level or "info",
+	}
 end
 
 local function summary_lines(report)
@@ -21,12 +80,12 @@ local function summary_lines(report)
 		end
 	end
 	if #lines == 0 then
-		return report:sub(1, 500)
+		return report:sub(1, 400)
 	end
 	return table.concat(lines, "\n")
 end
 
-local resolve_paths = ya.sync(function(_, mode)
+local function resolve_paths(mode)
 	if mode == "tabs" then
 		if #cx.tabs < 2 then
 			return nil, nil, "Need at least 2 tabs"
@@ -61,42 +120,72 @@ local resolve_paths = ya.sync(function(_, mode)
 	end
 
 	return nil, nil, "Nothing to compare"
-end)
+end
 
-local ensure_script = ya.sync(function()
-	local ok, source = pcall(require, ".compare-script")
-	if not ok then
-		return nil, "Failed to load compare-script: " .. tostring(source)
+local function run_compare(script, a, b)
+	log("running bash " .. script)
+	local output, err = Command("bash"):arg({ script, a, b }):output()
+	if not output then
+		return nil, "Failed to run compare script: " .. tostring(err)
 	end
 
-	local cache = os.getenv("XDG_CACHE_HOME") or (os.getenv("HOME") .. "/.cache")
-	local path = cache .. "/yazi/compare/compare.sh"
+	local report = output.stdout
+	if output.stderr ~= "" then
+		report = report .. "\n" .. output.stderr
+	end
+	log("bash done, bytes=" .. tostring(#report))
+	return report
+end
 
-	local existing = io.open(path, "r")
-	if existing then
-		local content = existing:read("*a")
-		existing:close()
-		if content == source then
-			return path
-		end
+local function entry(_st, job)
+	log("entry start")
+	local mode = job.args and job.args[1]
+	local a, b
+
+	if mode == "--" then
+		a, b = job.args[2], job.args[3]
+	elseif mode == "tabs" then
+		a, b = resolve_paths("tabs")
+	else
+		a, b = resolve_paths("selection")
 	end
 
-	local dir = path:match("^(.*)/[^/]+$")
-	if dir then
-		Command("mkdir"):arg("-p"):arg(dir):status()
+	if not a or not b then
+		log("path error: " .. tostring(b))
+		return notify("Compare", b or "Missing paths", "error", FINAL_NOTIFY_SECS)
 	end
 
-	local f = io.open(path, "w")
-	if not f then
-		return nil, "Cannot write compare script to " .. path
-	end
-	f:write(source)
-	f:close()
-	Command("chmod"):arg("+x"):arg(path):status()
-	return path
-end)
+	log("A=" .. a)
+	log("B=" .. b)
 
-local save_report = ya.sync(function(_, report)
+	local source, req_err = load_script_source()
+	if not source then
+		log("require failed: " .. req_err)
+		return notify("Compare", "Failed to load compare-script: " .. req_err, "error", FINAL_NOTIFY_SECS)
+	end
+
+	local script, err = ensure_script(source)
+	if not script then
+		log("ensure_script failed: " .. tostring(err))
+		return notify("Compare", err, "error", FINAL_NOTIFY_SECS)
+	end
+
+	notify(
+		"Compare",
+		string.format("Comparing…\n%s\n%s", basename(a), basename(b)),
+		"info",
+		FINAL_NOTIFY_SECS
+	)
+
+	local report, run_err = run_compare(script, a, b)
+	if not report then
+		log("run_compare failed: " .. tostring(run_err))
+		return notify("Compare", run_err, "error", FINAL_NOTIFY_SECS)
+	end
+
+	local brief = summary_lines(report)
+	local level = report:match("RESULT: IDENTICAL") and "info" or "warn"
+
 	local report_path = os.tmpname() .. ".txt"
 	local f = io.open(report_path, "w")
 	if f then
@@ -104,114 +193,20 @@ local save_report = ya.sync(function(_, report)
 		f:close()
 		ya.clipboard(report_path)
 	end
-	return report_path
-end)
 
-local function show_error(msg)
-	ya.notify {
-		title = "Compare",
-		content = msg,
-		timeout = FINAL_NOTIFY_SECS,
-		level = "error",
-	}
-end
-
-local function show_working(a, b)
-	ya.notify {
-		title = "Compare — working",
-		content = string.format(
-			"%s ↔ %s\n\nComparing… large folders can take a while.\nTask spinner (top) shows progress.",
+	log("done, notify user")
+	notify(
+		"Compare",
+		string.format(
+			"%s ↔ %s\n\n%s\n\nReport: %s",
 			basename(a),
-			basename(b)
+			basename(b),
+			brief,
+			report_path
 		),
-		timeout = WORKING_NOTIFY_SECS,
-		level = "info",
-	}
-end
-
-local function show_result(a, b, report, report_path)
-	local brief = summary_lines(report)
-	if brief == "" then
-		brief = "Compare finished (no summary text)."
-	end
-
-	local level = report:match("RESULT: IDENTICAL") and "info" or "warn"
-	local body = string.format(
-		"%s ↔ %s\n\n%s\n\nReport copied:\n%s",
-		basename(a),
-		basename(b),
-		brief,
-		report_path or "(not saved)"
+		level,
+		FINAL_NOTIFY_SECS
 	)
-
-	-- Toast (auto-dismiss)
-	ya.notify {
-		title = "Compare — done",
-		content = body,
-		timeout = FINAL_NOTIFY_SECS,
-		level = level,
-	}
-
-	-- Center popup (hard to miss; press Enter/Esc to close)
-	ya.confirm {
-		pos = { "center", w = 72, h = 16 },
-		title = "Compare — done",
-		body = body,
-	}
-end
-
-local function run_compare_job(a, b)
-	local script, err = ensure_script()
-	if not script then
-		return show_error(err)
-	end
-
-	show_working(a, b)
-	ya.dbg("[compare] A=", a, "B=", b)
-
-	local child, spawn_err = Command("bash"):arg({ script, a, b }):stdout(Command.PIPED):stderr(Command.PIPED):spawn()
-	if not child then
-		return show_error("Failed to start compare: " .. tostring(spawn_err))
-	end
-
-	local output, wait_err = child:wait_with_output()
-	if not output then
-		return show_error("Compare failed: " .. tostring(wait_err))
-	end
-
-	local report = output.stdout
-	if output.stderr ~= "" then
-		report = report .. "\n" .. output.stderr
-	end
-	if report == "" then
-		report = "ERROR: compare produced no output"
-	end
-
-	ya.dbg("[compare] report bytes=", #report)
-	local report_path = save_report(report)
-	show_result(a, b, report, report_path)
-end
-
-local function entry(_st, job)
-	local mode = job.args and job.args[1]
-
-	ya.async(function()
-		if mode == "--" then
-			local a, b = job.args[2], job.args[3]
-			if not a or not b then
-				return show_error("Usage: plugin compare -- /path/a /path/b")
-			end
-			return run_compare_job(a, b)
-		end
-
-		local pick_mode = mode == "tabs" and "tabs" or "selection"
-		local a, b, err = resolve_paths(pick_mode)
-		if not a then
-			return show_error(err or "Missing paths")
-		end
-
-		run_compare_job(a, b)
-	end)
 end
 
 return { entry = entry }
