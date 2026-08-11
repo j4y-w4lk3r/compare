@@ -1,7 +1,9 @@
+--- @sync entry
 --- Compare two files or directories (selected/hovered, two selections, or two tabs).
+--- Resolve paths + prepare script synchronously; only bash runs in ya.async.
 
 local FINAL_NOTIFY_SECS = 10
-local WORKING_NOTIFY_SECS = 120
+local COMPARE_TIMEOUT_SECS = 120
 
 local function log(msg)
 	ya.dbg("[compare] ", msg)
@@ -45,7 +47,16 @@ local function summary_lines(report)
 	return table.concat(lines, "\n")
 end
 
-local resolve_paths = ya.sync(function(_, mode)
+local function notify(title, content, level, timeout)
+	ya.notify {
+		title = title or "Compare",
+		content = content,
+		timeout = timeout or FINAL_NOTIFY_SECS,
+		level = level or "info",
+	}
+end
+
+local function resolve_paths(mode)
 	if mode == "tabs" then
 		if #cx.tabs < 2 then
 			return nil, nil, "Need at least 2 tabs"
@@ -66,23 +77,19 @@ local resolve_paths = ya.sync(function(_, mode)
 	if #paths >= 2 then
 		return paths[1], paths[2]
 	end
-
 	if #paths == 1 and hover_path and paths[1] ~= hover_path then
 		return paths[1], hover_path
 	end
-
 	if #paths == 1 then
 		return nil, nil, "Select one item and hover another, or select two items"
 	end
-
 	if hover_path then
 		return nil, nil, "Select one item to compare with the hovered item"
 	end
-
 	return nil, nil, "Nothing to compare"
-end)
+end
 
-local prepare_script = ya.sync(function()
+local function prepare_script()
 	local src_path = plugin_dir() .. "/compare-script.lua"
 	local f, err = io.open(src_path, "r")
 	if not f then
@@ -111,7 +118,6 @@ local prepare_script = ya.sync(function()
 		local old = existing:read("*a")
 		existing:close()
 		if old == source then
-			log("reuse cached compare.sh")
 			return path
 		end
 	end
@@ -124,20 +130,10 @@ local prepare_script = ya.sync(function()
 	out:write(source)
 	out:close()
 	os.execute('chmod +x "' .. path:gsub('"', '\\"') .. '"')
-	log("wrote cached compare.sh")
 	return path
-end)
+end
 
-local notify = ya.sync(function(_, title, content, level, timeout)
-	ya.notify {
-		title = title or "Compare",
-		content = content,
-		timeout = timeout or FINAL_NOTIFY_SECS,
-		level = level or "info",
-	}
-end)
-
-local finish = ya.sync(function(_, a, b, report)
+local show_result = ya.sync(function(_, a, b, report)
 	local brief = summary_lines(report)
 	if brief == "" then
 		brief = "Compare finished."
@@ -145,90 +141,91 @@ local finish = ya.sync(function(_, a, b, report)
 	local level = report:match("RESULT: IDENTICAL") and "info" or "warn"
 
 	local report_path = os.tmpname() .. ".txt"
-	local f = io.open(report_path, "w")
-	if f then
-		f:write(report)
-		f:close()
+	local rf = io.open(report_path, "w")
+	if rf then
+		rf:write(report)
+		rf:close()
 		ya.clipboard(report_path)
 	end
 
 	log("done, notify user")
-	ya.notify {
-		title = "Compare — done",
-		content = string.format(
-			"%s ↔ %s\n\n%s\n\nReport: %s",
-			basename(a),
-			basename(b),
-			brief,
-			report_path
-		),
-		timeout = FINAL_NOTIFY_SECS,
-		level = level,
-	}
-end)
-
-local function run_job(a, b)
-	log("A=" .. a)
-	log("B=" .. b)
-
 	notify(
-		"Compare",
-		string.format("Comparing…\n%s\n%s\n\n(Task spinner = still working)", basename(a), basename(b)),
-		"info",
-		WORKING_NOTIFY_SECS
+		"Compare — done",
+		string.format("%s ↔ %s\n\n%s\n\nReport: %s", basename(a), basename(b), brief, report_path),
+		level,
+		FINAL_NOTIFY_SECS
 	)
-
-	local script, err = prepare_script()
-	if not script then
-		log("prepare failed: " .. tostring(err))
-		return notify("Compare", err, "error", FINAL_NOTIFY_SECS)
-	end
-
-	log("running bash " .. script)
-	local child, spawn_err = Command("bash"):arg({ script, a, b }):stdout(Command.PIPED):stderr(Command.PIPED):spawn()
-	if not child then
-		log("spawn failed: " .. tostring(spawn_err))
-		return notify("Compare", "Failed to start compare: " .. tostring(spawn_err), "error", FINAL_NOTIFY_SECS)
-	end
-
-	local output, wait_err = child:wait_with_output()
-	if not output then
-		log("wait failed: " .. tostring(wait_err))
-		return notify("Compare", "Compare failed: " .. tostring(wait_err), "error", FINAL_NOTIFY_SECS)
-	end
-
-	local report = output.stdout
-	if output.stderr ~= "" then
-		report = report .. "\n" .. output.stderr
-	end
-	if report == "" then
-		report = "ERROR: compare produced no output"
-	end
-	log("bash done, bytes=" .. tostring(#report))
-	finish(a, b, report)
-end
+end)
 
 local function entry(_st, job)
 	log("entry start")
 	local mode = job.args and job.args[1]
+	local a, b, err
+
+	if mode == "--" then
+		a, b = job.args[2], job.args[3]
+		if not a or not b then
+			return notify("Compare", "Usage: plugin compare -- /path/a /path/b", "error")
+		end
+	elseif mode == "tabs" then
+		a, b, err = resolve_paths("tabs")
+	else
+		a, b, err = resolve_paths("selection")
+	end
+
+	if not a then
+		log("path error: " .. tostring(err))
+		return notify("Compare", err or "Missing paths", "error")
+	end
+
+	log("A=" .. a)
+	log("B=" .. b)
+
+	local script, prep_err = prepare_script()
+	if not script then
+		log("prepare failed: " .. tostring(prep_err))
+		return notify("Compare", prep_err, "error")
+	end
+
+	notify(
+		"Compare",
+		string.format("Comparing…\n%s\n%s", basename(a), basename(b)),
+		"info",
+		COMPARE_TIMEOUT_SECS
+	)
 
 	ya.async(function()
-		if mode == "--" then
-			local a, b = job.args[2], job.args[3]
-			if not a or not b then
-				return notify("Compare", "Usage: plugin compare -- /path/a /path/b", "error", FINAL_NOTIFY_SECS)
-			end
-			return run_job(a, b)
+		log("running bash (timeout " .. COMPARE_TIMEOUT_SECS .. "s)")
+		local child, spawn_err = Command("timeout")
+			:arg({ tostring(COMPARE_TIMEOUT_SECS), "bash", script, a, b })
+			:stdout(Command.PIPED)
+			:stderr(Command.PIPED)
+			:spawn()
+
+		if not child then
+			log("spawn failed: " .. tostring(spawn_err))
+			return show_result(a, b, "ERROR: failed to start compare: " .. tostring(spawn_err))
 		end
 
-		local pick = mode == "tabs" and "tabs" or "selection"
-		local a, b, err = resolve_paths(pick)
-		if not a then
-			log("path error: " .. tostring(err))
-			return notify("Compare", err or "Missing paths", "error", FINAL_NOTIFY_SECS)
+		local output, wait_err = child:wait_with_output()
+		if not output then
+			log("wait failed: " .. tostring(wait_err))
+			return show_result(a, b, "ERROR: compare failed: " .. tostring(wait_err))
 		end
 
-		run_job(a, b)
+		local report = output.stdout
+		if output.stderr ~= "" then
+			report = report .. "\n" .. output.stderr
+		end
+		if report == "" then
+			report = "ERROR: compare produced no output"
+		end
+		if output.status and output.status.code == 124 then
+			report = report .. "\n\nRESULT: TIMED OUT after " .. COMPARE_TIMEOUT_SECS .. "s (folder too large?)"
+		end
+
+		log("bash done, bytes=" .. tostring(#report) .. " code=" .. tostring(output.status and output.status.code))
+		show_result(a, b, report)
 	end)
 end
 
