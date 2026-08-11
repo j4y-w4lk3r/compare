@@ -1,15 +1,29 @@
 --- Compare two files or directories (selected/hovered, two selections, or two tabs).
 --- Runs synchronously on purpose: blocking I/O must not run inside ya.async.
 
-local function script_path()
-	local config = os.getenv("YAZI_CONFIG_HOME")
-	if not config or config == "" then
-		config = (os.getenv("XDG_CONFIG_HOME") or (os.getenv("HOME") .. "/.config")) .. "/yazi"
-	end
-	return config .. "/plugins/compare.yazi/compare.sh"
+local SCRIPT_SOURCE = require("compare-script")
+
+local function cache_script_path()
+	local cache = os.getenv("XDG_CACHE_HOME") or (os.getenv("HOME") .. "/.cache")
+	return cache .. "/yazi/compare/compare.sh"
 end
 
-local SCRIPT = script_path()
+local function ensure_script()
+	local path = cache_script_path()
+	local dir = path:match("^(.*)/[^/]+$")
+	if dir then
+		os.execute('mkdir -p "' .. dir:gsub('"', '\\"') .. '"')
+	end
+
+	local f = io.open(path, "w")
+	if not f then
+		return nil, "Cannot write compare script to " .. path
+	end
+	f:write(SCRIPT_SOURCE)
+	f:close()
+	os.execute('chmod +x "' .. path:gsub('"', '\\"') .. '"')
+	return path
+end
 
 local function basename(path)
 	return tostring(path):match("([^/]+)/?$") or path
@@ -100,10 +114,10 @@ local function resolve_paths(mode)
 	return nil, "Nothing to compare"
 end
 
-local function run_compare(a, b)
-	local output, err = Command("bash"):arg({ SCRIPT, a, b }):output()
+local function run_compare(script, a, b)
+	local output, err = Command("bash"):arg({ script, a, b }):output()
 	if not output then
-		return nil, "Failed to run compare.sh: " .. tostring(err)
+		return nil, "Failed to run compare script: " .. tostring(err)
 	end
 
 	local report = output.stdout
@@ -129,11 +143,16 @@ local function entry(_st, job)
 		return notify("Compare", b or "Missing paths", "error")
 	end
 
+	local script, err = ensure_script()
+	if not script then
+		return notify("Compare", err, "error")
+	end
+
 	ya.dbg("[compare] A=", a, "B=", b)
 
-	local report, err = run_compare(a, b)
+	local report, run_err = run_compare(script, a, b)
 	if not report then
-		return notify("Compare", err, "error")
+		return notify("Compare", run_err, "error")
 	end
 
 	local brief = summary_lines(report)

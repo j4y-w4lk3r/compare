@@ -7,7 +7,7 @@ Reports whether paths are identical, different, or if one is a subset of the oth
 ## Installation
 
 ```sh
-ya pkg add j4y-w4lk3r/compare.yazi
+ya pkg add j4y-w4lk3r/compare
 ```
 
 ## Usage
@@ -34,10 +34,10 @@ Results appear in a Yazi notification. Full report path is copied to clipboard.
 
 ### CLI
 
-The shell script can also be run directly:
+The compare script is extracted to cache on first use:
 
 ```sh
-~/.config/yazi/plugins/compare.yazi/compare.sh /path/a /path/b
+~/.cache/yazi/compare/compare.sh /path/a /path/b
 ```
 
 ## License

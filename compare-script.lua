@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+return [[#!/usr/bin/env bash
 # Compare two files or directories and print a human-readable report.
 set -euo pipefail
 
@@ -104,7 +104,6 @@ if [[ -d $a && -d $b ]]; then
 		exit 0
 	fi
 
-	# Compare shared files in parallel; size check first, then cmp.
 	workers=$(nproc 2>/dev/null || echo 4)
 	export CMP_A=$a CMP_B=$b
 	xargs -a "$shared" -P "$workers" -I{} sh -c '
@@ -168,3 +167,4 @@ fi
 echo "Type: mixed (one file, one directory)"
 echo "RESULT: DIFFERENT (not comparable as the same kind)"
 exit 0
+]]
