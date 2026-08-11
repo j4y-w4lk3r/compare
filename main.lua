@@ -32,12 +32,17 @@ local function load_script_source()
 	f:close()
 
 	local prefix = "return [==["
-	local suffix = "]==]"
-	if content:sub(1, #prefix) == prefix and content:sub(-#suffix) == suffix then
-		return content:sub(#prefix + 1, -#suffix - 1)
+	if content:sub(1, #prefix) ~= prefix then
+		return nil, "compare-script.lua format not recognized"
 	end
 
-	return nil, "compare-script.lua format not recognized"
+	local rest = content:sub(#prefix + 1)
+	local end_pos = rest:find("]==]", 1, true)
+	if not end_pos then
+		return nil, "compare-script.lua missing closing delimiter"
+	end
+
+	return rest:sub(1, end_pos - 1)
 end
 
 local function cache_script_path()
