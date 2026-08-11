@@ -14,12 +14,30 @@ local function log(msg)
 	end
 end
 
-local function load_script_source()
-	local ok, source = pcall(require, ".compare-script")
-	if not ok then
-		return nil, tostring(source)
+local function plugin_dir()
+	local config = os.getenv("YAZI_CONFIG_HOME")
+	if not config or config == "" then
+		config = (os.getenv("XDG_CONFIG_HOME") or (os.getenv("HOME") .. "/.config")) .. "/yazi"
 	end
-	return source
+	return config .. "/plugins/compare.yazi"
+end
+
+local function load_script_source()
+	local path = plugin_dir() .. "/compare-script.lua"
+	local f, err = io.open(path, "r")
+	if not f then
+		return nil, "cannot open compare-script.lua: " .. tostring(err)
+	end
+	local content = f:read("*a")
+	f:close()
+
+	local prefix = "return [==["
+	local suffix = "]==]"
+	if content:sub(1, #prefix) == prefix and content:sub(-#suffix) == suffix then
+		return content:sub(#prefix + 1, -#suffix - 1)
+	end
+
+	return nil, "compare-script.lua format not recognized"
 end
 
 local function cache_script_path()
