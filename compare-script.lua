@@ -1,4 +1,4 @@
-return [[#!/usr/bin/env bash
+return [==[#!/usr/bin/env bash
 # Compare two files or directories and print a human-readable report.
 set -euo pipefail
 
@@ -167,4 +167,4 @@ fi
 echo "Type: mixed (one file, one directory)"
 echo "RESULT: DIFFERENT (not comparable as the same kind)"
 exit 0
-]]
+]==]
