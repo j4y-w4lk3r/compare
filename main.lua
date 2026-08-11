@@ -133,7 +133,7 @@ local function prepare_script()
 	return path
 end
 
-local show_result = ya.sync(function(_, a, b, report)
+local function show_result(a, b, report)
 	local brief = summary_lines(report)
 	if brief == "" then
 		brief = "Compare finished."
@@ -145,17 +145,23 @@ local show_result = ya.sync(function(_, a, b, report)
 	if rf then
 		rf:write(report)
 		rf:close()
-		ya.clipboard(report_path)
+		pcall(ya.clipboard, report_path)
 	end
 
 	log("done, notify user")
-	notify(
-		"Compare — done",
-		string.format("%s ↔ %s\n\n%s\n\nReport: %s", basename(a), basename(b), brief, report_path),
-		level,
-		FINAL_NOTIFY_SECS
-	)
-end)
+	ya.notify {
+		title = "Compare — done",
+		content = string.format(
+			"%s ↔ %s\n\n%s\n\nReport: %s",
+			basename(a),
+			basename(b),
+			brief,
+			report_path
+		),
+		timeout = FINAL_NOTIFY_SECS,
+		level = level,
+	}
+end
 
 local function entry(_st, job)
 	log("entry start")
