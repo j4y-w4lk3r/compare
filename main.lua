@@ -2,8 +2,8 @@
 --- Compare two files or directories (selected/hovered, two selections, or two tabs).
 --- Resolve paths + prepare script synchronously; only bash runs in ya.async.
 
-local FINAL_NOTIFY_SECS = 10
-local WORKING_NOTIFY_SECS = 4
+local FINAL_NOTIFY_SECS = 5
+local WORKING_NOTIFY_SECS = 3
 local COMPARE_TIMEOUT_SECS = 120
 
 local function log(msg)
